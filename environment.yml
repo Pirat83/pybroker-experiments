@@ -1,0 +1,19 @@
+name: pybroker-experiments
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - jupyter
+  - jupyterlab
+  - numpy<1.24
+  - pandas<2.0.0
+  - pip
+  - python-dotenv
+  - pytest
+  - quantstats
+
+  - pip:
+      - lib-pybroker
+      - pandas_ta
+      - pytest-resource-path
