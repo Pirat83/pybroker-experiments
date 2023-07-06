@@ -12,6 +12,7 @@ dependencies:
   - python-dotenv
   - pytest
   - quantstats
+  - scikit-optimize
 
   - pip:
       - lib-pybroker
