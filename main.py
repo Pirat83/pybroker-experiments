@@ -1,7 +1,7 @@
 import decimal
 import os
 import pprint
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Mapping
 
 import numpy as np
@@ -12,9 +12,9 @@ import pytz
 from pandas import Series, DataFrame
 from pybroker import Strategy, ExecContext, TestResult, Alpaca, StrategyConfig
 
-pybroker.enable_data_source_cache('roc_54')
-verbose: bool = True
-debug: bool = True
+pybroker.enable_data_source_cache('roc')
+verbose: bool = False
+debug: bool = False
 
 
 def print_data_frame(data: [Series, DataFrame]):
@@ -25,7 +25,7 @@ def print_data_frame(data: [Series, DataFrame]):
 # noinspection SpellCheckingInspection
 def before_exec(ctxs: Mapping[str, ExecContext]):
     returns: Mapping[str, float] = {
-        symbol: ctx.indicator('roc_54')[-1]
+        symbol: ctx.indicator('roc')[-1]
         for symbol, ctx in ctxs.items()
     }
 
@@ -93,23 +93,27 @@ def after_exec(ctx: Mapping[str, ExecContext]):
 
 
 def main():
-    roc_54 = pybroker.indicator('roc_54', lambda data: pandas_ta.roc(Series(data.close), length=54))
+    warmup: int = 5
+    roc = pybroker.indicator('roc', lambda data: pandas_ta.roc(Series(data.close), length=warmup))
+
+    start_date: datetime = datetime(2023, 1, 1, tzinfo=pytz.timezone('America/New_York'))
+    end_date: datetime = datetime(2023, 2, 1, tzinfo=pytz.timezone('America/New_York'))
 
     strategy: Strategy = Strategy(
         Alpaca(os.getenv('ALPACA_KEY_ID'), os.getenv('ALPACA_SECRET')),
-        datetime(2023, 1, 1, tzinfo=pytz.timezone('America/New_York')) - timedelta(days=1),
-        datetime(2023, 6, 30, tzinfo=pytz.timezone('America/New_York')),
+        start_date, end_date,
         StrategyConfig(initial_cash=10000, exit_on_last_bar=True)
     )
     strategy.set_before_exec(before_exec)
-    strategy.add_execution(exec_fn, ['IYY', 'IWM', 'IVV'], indicators=[roc_54])
+    strategy.add_execution(exec_fn, ['IYY', 'IWM', 'IVV'], indicators=[roc])
 
-    result: TestResult = strategy.backtest(timeframe='15m', warmup=54)
+    result: TestResult = strategy.backtest(start_date, end_date, timeframe='1d')
 
     print_data_frame(result.portfolio)
-    print_data_frame(result.positions)
-    print_data_frame(result.orders)
-    print_data_frame(result.trades)
+    if debug:
+        print_data_frame(result.orders)
+        print_data_frame(result.positions)
+        print_data_frame(result.trades)
 
 
 if __name__ == '__main__':
