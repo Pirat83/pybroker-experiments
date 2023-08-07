@@ -1,20 +1,19 @@
 import decimal
 import os
-import pprint
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Mapping
 
 import numpy as np
 import pandas as pd
 import pandas_ta
-import pybroker
-import pytz
 from pandas import Series, DataFrame
-from pybroker import Strategy, ExecContext, TestResult, Alpaca, StrategyConfig
+from pybroker import Strategy, ExecContext, TestResult, Alpaca, StrategyConfig, PriceType
 
-pybroker.enable_data_source_cache('roc')
-verbose: bool = False
 debug: bool = False
+verbose: bool = False
+
+start_date: datetime = datetime(2023, 8, 1)
+end_date: datetime = datetime(2023, 8, 7)
 
 
 def print_data_frame(data: [Series, DataFrame]):
@@ -24,6 +23,10 @@ def print_data_frame(data: [Series, DataFrame]):
 
 # noinspection SpellCheckingInspection
 def before_exec(ctxs: Mapping[str, ExecContext]):
+    dt = np.all([c.dt for c in ctxs.values()])
+    if dt <= start_date - timedelta(days=1):
+        return
+
     returns: Mapping[str, float] = {
         symbol: ctx.indicator('roc')[-1]
         for symbol, ctx in ctxs.items()
@@ -38,13 +41,13 @@ def before_exec(ctxs: Mapping[str, ExecContext]):
                     ctx.sell_all_shares()
                 short_position = ctx.short_pos(symbol)
                 if symbol in signals:
-                    ctx.sell_fill_price = pybroker.PriceType.OPEN
+                    ctx.sell_fill_price = PriceType.OPEN
                     ctx.sell_shares = ctx.calc_target_shares(1 / len(signals))
                     ctx.stop_loss_pct = 2.75
 
                 elif symbol not in signals and short_position:
                     if np.less(short_position.market_value, decimal.Decimal(0.04) * ctx.total_market_value):
-                        ctx.cover_fill_price = pybroker.PriceType.OPEN
+                        ctx.cover_fill_price = PriceType.OPEN
                         ctx.cover_all_shares()
                     else:
                         ctx.cover_shares = short_position.shares / 2
@@ -55,13 +58,13 @@ def before_exec(ctxs: Mapping[str, ExecContext]):
                     ctx.cover_all_shares()
                 long_position = ctx.long_pos(symbol)
                 if symbol in signals:
-                    ctx.buy_fill_price = pybroker.PriceType.OPEN
+                    ctx.buy_fill_price = PriceType.OPEN
                     ctx.buy_shares = ctx.calc_target_shares(1 / len(signals))
                     ctx.stop_loss_pct = 2.75
 
                 elif symbol not in signals and long_position:
                     if np.less(long_position.market_value, decimal.Decimal(0.04) * ctx.total_market_value):
-                        ctx.sell_fill_price = pybroker.PriceType.OPEN
+                        ctx.sell_fill_price = PriceType.OPEN
                         ctx.sell_all_shares()
                     else:
                         ctx.sell_shares = long_position.shares / 2
@@ -83,37 +86,32 @@ def exec_fn(ctx: ExecContext):
               f"Long:{ctx.long_pos(ctx.symbol).market_value if ctx.long_pos(ctx.symbol) else 0:>12.2f} "
               f"Short:{ctx.short_pos(ctx.symbol).market_value if ctx.short_pos(ctx.symbol) else 0:>12.2f}"
               )
-    if debug and ctx.bars == 6:
-        print()
 
-
-def after_exec(ctx: Mapping[str, ExecContext]):
-    print('after_exec')
-    pprint.pprint(ctx)
+    if ctx.dt <= start_date - timedelta(days=1):
+        return
 
 
 def main():
     warmup: int = 5
+    import pybroker
     roc = pybroker.indicator('roc', lambda data: pandas_ta.roc(Series(data.close), length=warmup))
-
-    start_date: datetime = datetime(2023, 1, 1, tzinfo=pytz.timezone('America/New_York'))
-    end_date: datetime = datetime(2023, 2, 1, tzinfo=pytz.timezone('America/New_York'))
 
     strategy: Strategy = Strategy(
         Alpaca(os.getenv('ALPACA_KEY_ID'), os.getenv('ALPACA_SECRET')),
-        start_date, end_date,
+        start_date - timedelta(days=warmup * 2), end_date,
         StrategyConfig(initial_cash=10000, exit_on_last_bar=True)
     )
     strategy.set_before_exec(before_exec)
     strategy.add_execution(exec_fn, ['IYY', 'IWM', 'IVV'], indicators=[roc])
 
-    result: TestResult = strategy.backtest(start_date, end_date, timeframe='1d')
+    result: TestResult = strategy.backtest(start_date - timedelta(days=warmup * 2), end_date, timeframe='1d')
 
     print_data_frame(result.portfolio)
     if debug:
         print_data_frame(result.orders)
         print_data_frame(result.positions)
         print_data_frame(result.trades)
+        print_data_frame(result.metrics_df)
 
 
 if __name__ == '__main__':
