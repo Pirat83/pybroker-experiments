@@ -1,19 +1,30 @@
-import decimal
-import os
+import heapq
 from datetime import datetime, timedelta
+from statistics import mean
 from typing import Mapping
 
-import numpy as np
 import pandas as pd
-import pandas_ta
+import pybroker
+import scipy.stats as stats
+import talib
 from pandas import Series, DataFrame
-from pybroker import Strategy, ExecContext, TestResult, Alpaca, StrategyConfig, PriceType
+from pybroker import Strategy, ExecContext, TestResult, StrategyConfig, Day
 
-debug: bool = False
+from extensions.alpaca import AlpacaAdjustedPricesDataSource
+
+pybroker.disable_caches()
+
+debug: bool = True
 verbose: bool = False
 
-start_date: datetime = datetime(2023, 8, 1)
-end_date: datetime = datetime(2023, 8, 7)
+start_date: datetime = datetime(2024, 7, 1)
+end_date: datetime = datetime(2024, 7, 27)
+
+n = 3
+
+multiplier: int = 26
+# warmup: int = 25 * 2
+warmup: int = 5 * 2
 
 
 def print_data_frame(data: [Series, DataFrame]):
@@ -21,62 +32,50 @@ def print_data_frame(data: [Series, DataFrame]):
         print(data)
 
 
-# noinspection SpellCheckingInspection
 def before_exec(ctxs: Mapping[str, ExecContext]):
-    dt = np.all([c.dt for c in ctxs.values()])
-    if dt <= start_date - timedelta(days=1):
+    dt = {c.dt for c in ctxs.values()}
+    dt = dt.pop()
+    if dt < start_date:
         return
 
-    returns: Mapping[str, float] = {
-        symbol: ctx.indicator('roc')[-1]
+    returns_1 = [
+        ctx.indicator('midpoint_roc_1')[-1]
+        for ctx in ctxs.values()
+    ]
+    returns_5 = [
+        ctx.indicator('midpoint_roc_5')[-1]
+        for ctx in ctxs.values()
+    ]
+
+    pos_1: Mapping[str, float] = {
+        symbol: stats.percentileofscore(returns_1, ctx.indicator('midpoint_roc_1')[-1], nan_policy='omit')
+        for symbol, ctx in ctxs.items()
+    }
+    pos_5: Mapping[str, float] = {
+        symbol: stats.percentileofscore(returns_5, ctx.indicator('midpoint_roc_5')[-1], nan_policy='omit')
         for symbol, ctx in ctxs.items()
     }
 
-    threshold = np.quantile(list(returns.values()), 0.5)
-    match np.sign(threshold):
-        case -1:
-            signals = {key: value for key, value in returns.items() if value < threshold}
-            for symbol, ctx in ctxs.items():
-                if ctx.long_pos(symbol):
-                    ctx.sell_all_shares()
-                short_position = ctx.short_pos(symbol)
-                if symbol in signals:
-                    ctx.sell_fill_price = PriceType.OPEN
-                    ctx.sell_shares = ctx.calc_target_shares(1 / len(signals))
-                    ctx.stop_loss_pct = 2.75
+    scores: Mapping[str, float] = {symbol: mean([
+        pos_1.get(symbol), pos_5.get(symbol)
+    ]) for symbol, ctx in ctxs.items()}
 
-                elif symbol not in signals and short_position:
-                    if np.less(short_position.market_value, decimal.Decimal(0.04) * ctx.total_market_value):
-                        ctx.cover_fill_price = PriceType.OPEN
-                        ctx.cover_all_shares()
-                    else:
-                        ctx.cover_shares = short_position.shares / 2
-        case 1:
-            signals = {key: value for key, value in returns.items() if value > threshold}
-            for symbol, ctx in ctxs.items():
-                if ctx.short_positions(symbol):
-                    ctx.cover_all_shares()
-                long_position = ctx.long_pos(symbol)
-                if symbol in signals:
-                    ctx.buy_fill_price = PriceType.OPEN
-                    ctx.buy_shares = ctx.calc_target_shares(1 / len(signals))
-                    ctx.stop_loss_pct = 2.75
+    top_scores = heapq.nlargest(n, scores, key=scores.get)
 
-                elif symbol not in signals and long_position:
-                    if np.less(long_position.market_value, decimal.Decimal(0.04) * ctx.total_market_value):
-                        ctx.sell_fill_price = PriceType.OPEN
-                        ctx.sell_all_shares()
-                    else:
-                        ctx.sell_shares = long_position.shares / 2
-        case x if np.isnan(x):
-            return
-        case x if x == 0:
-            return
-        case _:
-            return
+    for symbol, ctx in ctxs.items():
+        ctx.score = scores.get(symbol)
+        if symbol in top_scores:
+            ctx.buy_shares = ctx.calc_target_shares(1 / n)
+        else:
+            ctx.sell_all_shares()
+    return None
 
 
 def exec_fn(ctx: ExecContext):
+    if ctx.dt < start_date:
+        return
+    if debug:
+        print(f"{ctx.symbol:<5s} {ctx.dt} {ctx.bars:>5d}: Score:{ctx.score if ctx.score else 0:>12.2f}")
     if verbose:
         print(f"{ctx.symbol:<5s} {ctx.dt} {ctx.bars:>5d}: "
               f"O:{ctx.open[-1]:>10.4f} H:{ctx.open[-1]:10.4f} L:{ctx.low[-1]:10.4f} C:{ctx.close[-1]:10.4f} "
@@ -87,31 +86,61 @@ def exec_fn(ctx: ExecContext):
               f"Short:{ctx.short_pos(ctx.symbol).market_value if ctx.short_pos(ctx.symbol) else 0:>12.2f}"
               )
 
-    if ctx.dt <= start_date - timedelta(days=1):
-        return
+
+def midpoint_roc(data, length):
+    mp = (data.high + data.low) / 2
+    roc = talib.ROC(mp, length)
+    return roc
 
 
 def main():
-    warmup: int = 5
-    import pybroker
-    roc = pybroker.indicator('roc', lambda data: pandas_ta.roc(Series(data.close), length=warmup))
+    midpoint_roc_1 = pybroker.indicator('midpoint_roc_1', midpoint_roc, length=1 * multiplier)
+    midpoint_roc_5 = pybroker.indicator('midpoint_roc_5', midpoint_roc, length=5 * multiplier)
+
+    basic_etf_tickers = ['IYY', 'IWM', 'IVV']
+    s_and_p_sector_etfs = [
+        'SPY',  # S&P U.S. 500 ETF
+        'XLC',  # S&P U.S. Communication Services ETF
+        'XLY',  # S&P U.S. Consumer Discretionary ETF
+        'XLP',  # S&P U.S. Consumer Staples ETF
+        'XLE',  # S&P U.S. Energy ETF
+        'XLF',  # S&P U.S. Financials ETF
+        'XLV',  # S&P U.S. Health Care ETF
+        'XLI',  # S&P U.S. Industrial ETF
+        'XLB',  # S&P U.S. Basic Materials ETF
+        'XLK',  # S&P U.S. Technology ETF
+        'XLU',  # S&P U.S. Utilities ETF
+    ]
+    magnificent_7_tickers = [
+        'AAPL',  # Apple
+        'MSFT',  # Microsoft
+        'AMZN',  # Amazon
+        'GOOGL',  # Alphabet (Class A)
+        'GOOG',  # Alphabet (Class C)
+        'META',  # Meta Platforms
+        'NVDA',  # Nvidia
+        'TSLA'  # Tesla
+    ]
 
     strategy: Strategy = Strategy(
-        Alpaca(os.getenv('ALPACA_KEY_ID'), os.getenv('ALPACA_SECRET')),
-        start_date - timedelta(days=warmup * 2), end_date,
-        StrategyConfig(initial_cash=10000, exit_on_last_bar=True)
+        AlpacaAdjustedPricesDataSource(),
+        start_date - timedelta(days=warmup), end_date,
+        StrategyConfig(exit_on_last_bar=True)
     )
     strategy.set_before_exec(before_exec)
-    strategy.add_execution(exec_fn, ['IYY', 'IWM', 'IVV'], indicators=[roc])
+    strategy.add_execution(exec_fn, s_and_p_sector_etfs, indicators=[midpoint_roc_1, midpoint_roc_5])
 
-    result: TestResult = strategy.backtest(start_date - timedelta(days=warmup * 2), end_date, timeframe='1d')
+    result: TestResult = strategy.backtest(
+        start_date - timedelta(days=warmup), end_date, '15m',
+        ('9:30', '16:00'), [Day.MON, Day.TUES, Day.WEDS, Day.THURS, Day.FRI],
+    )
 
-    print_data_frame(result.portfolio)
     if debug:
+        print_data_frame(result.portfolio)
         print_data_frame(result.orders)
         print_data_frame(result.positions)
         print_data_frame(result.trades)
-        print_data_frame(result.metrics_df)
+    print_data_frame(result.metrics_df)
 
 
 if __name__ == '__main__':

@@ -3,17 +3,15 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.10
-  - jupyter
-  - jupyterlab
-  - numpy<1.24
-  - pandas<2.0.0
+  - python>=3.12
+  - numpy<2 # https://github.com/TA-Lib/ta-lib-python/issues/378, https://github.com/TA-Lib/ta-lib-python/issues/661
+  - pandas
   - pip
   - python-dotenv
-  - pytest
-  - quantstats
+  - scipy
+  - ta-lib
 
   - pip:
-      - lib-pybroker
-      - pandas_ta
-      - pytest-resource-path
+      - lib-pybroker=0.21.2
+      - numpy<2 # https://github.com/TA-Lib/ta-lib-python/issues/378, https://github.com/TA-Lib/ta-lib-python/issues/661
+
