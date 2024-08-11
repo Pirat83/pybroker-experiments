@@ -14,11 +14,11 @@ from extensions.alpaca import AlpacaAdjustedPricesDataSource
 
 pybroker.disable_caches()
 
-debug: bool = True
+debug: bool = False
 verbose: bool = False
 
-start_date: datetime = datetime(2024, 7, 1)
-end_date: datetime = datetime(2024, 7, 27)
+start_date: datetime = datetime(2024, 6, 1)
+end_date: datetime = datetime(2024, 8, 11)
 
 n = 3
 
