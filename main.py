@@ -14,11 +14,11 @@ from extensions.alpaca import AlpacaAdjustedPricesDataSource
 
 pybroker.disable_caches()
 
-debug: bool = False
+debug: bool = True
 verbose: bool = False
 
-start_date: datetime = datetime(2024, 6, 1)
-end_date: datetime = datetime(2024, 8, 11)
+start_date: datetime = datetime(2024, 1, 1)
+end_date: datetime = datetime(2024, 8, 16)
 
 n = 3
 
@@ -74,8 +74,6 @@ def before_exec(ctxs: Mapping[str, ExecContext]):
 def exec_fn(ctx: ExecContext):
     if ctx.dt < start_date:
         return
-    if debug:
-        print(f"{ctx.symbol:<5s} {ctx.dt} {ctx.bars:>5d}: Score:{ctx.score if ctx.score else 0:>12.2f}")
     if verbose:
         print(f"{ctx.symbol:<5s} {ctx.dt} {ctx.bars:>5d}: "
               f"O:{ctx.open[-1]:>10.4f} H:{ctx.open[-1]:10.4f} L:{ctx.low[-1]:10.4f} C:{ctx.close[-1]:10.4f} "
@@ -85,6 +83,7 @@ def exec_fn(ctx: ExecContext):
               f"Long:{ctx.long_pos(ctx.symbol).market_value if ctx.long_pos(ctx.symbol) else 0:>12.2f} "
               f"Short:{ctx.short_pos(ctx.symbol).market_value if ctx.short_pos(ctx.symbol) else 0:>12.2f}"
               )
+        print(f"{ctx.symbol:<5s} {ctx.dt} {ctx.bars:>5d}: Score:{ctx.score if ctx.score else 0:>12.2f}")
 
 
 def midpoint_roc(data, length):
@@ -125,7 +124,7 @@ def main():
     strategy: Strategy = Strategy(
         AlpacaAdjustedPricesDataSource(),
         start_date - timedelta(days=warmup), end_date,
-        StrategyConfig(exit_on_last_bar=True)
+        StrategyConfig(exit_on_last_bar=True, return_signals=True)
     )
     strategy.set_before_exec(before_exec)
     strategy.add_execution(exec_fn, s_and_p_sector_etfs, indicators=[midpoint_roc_1, midpoint_roc_5])
