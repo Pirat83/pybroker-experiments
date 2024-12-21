@@ -1,7 +1,9 @@
 import heapq
+import math
 from datetime import datetime, timedelta
 from statistics import mean
 from typing import Mapping
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pybroker
@@ -12,19 +14,21 @@ from pybroker import Strategy, ExecContext, TestResult, StrategyConfig, Day
 
 from extensions.alpaca import AlpacaAdjustedPricesDataSource
 
+pybroker.enable_logging()
 pybroker.disable_caches()
 
 debug: bool = True
 verbose: bool = False
+est_timezone = ZoneInfo('America/New_York')
+utc_timezone = ZoneInfo('UTC')
 
-start_date: datetime = datetime(2024, 1, 1)
-end_date: datetime = datetime(2024, 8, 16)
+start_date: datetime = datetime(2024, 1, 1, tzinfo=est_timezone)
+end_date: datetime = datetime(2024, 11, 30, tzinfo=est_timezone)
 
 n = 3
 
 multiplier: int = 26
-# warmup: int = 25 * 2
-warmup: int = 5 * 2
+warmup: int = 25 * 2
 
 
 def print_data_frame(data: [Series, DataFrame]):
@@ -35,16 +39,16 @@ def print_data_frame(data: [Series, DataFrame]):
 def before_exec(ctxs: Mapping[str, ExecContext]):
     dt = {c.dt for c in ctxs.values()}
     dt = dt.pop()
-    if dt < start_date:
+    if dt.astimezone(est_timezone) < start_date:
         return
 
     returns_1 = [
-        ctx.indicator('midpoint_roc_1')[-1]
-        for ctx in ctxs.values()
+        value for value in (ctx.indicator('midpoint_roc_1')[-1] for ctx in ctxs.values())
+        if not math.isnan(value)
     ]
     returns_5 = [
-        ctx.indicator('midpoint_roc_5')[-1]
-        for ctx in ctxs.values()
+        value for value in (ctx.indicator('midpoint_roc_5')[-1] for ctx in ctxs.values())
+        if not math.isnan(value)
     ]
 
     pos_1: Mapping[str, float] = {
@@ -72,7 +76,7 @@ def before_exec(ctxs: Mapping[str, ExecContext]):
 
 
 def exec_fn(ctx: ExecContext):
-    if ctx.dt < start_date:
+    if ctx.dt.astimezone(est_timezone) < start_date:
         return
     if verbose:
         print(f"{ctx.symbol:<5s} {ctx.dt} {ctx.bars:>5d}: "
@@ -93,8 +97,8 @@ def midpoint_roc(data, length):
 
 
 def main():
-    midpoint_roc_1 = pybroker.indicator('midpoint_roc_1', midpoint_roc, length=1 * multiplier)
-    midpoint_roc_5 = pybroker.indicator('midpoint_roc_5', midpoint_roc, length=5 * multiplier)
+    midpoint_roc_1 = pybroker.indicator('midpoint_roc_1', midpoint_roc, length=10 * multiplier)
+    midpoint_roc_5 = pybroker.indicator('midpoint_roc_5', midpoint_roc, length=50 * multiplier)
 
     basic_etf_tickers = ['IYY', 'IWM', 'IVV']
     s_and_p_sector_etfs = [
@@ -132,6 +136,7 @@ def main():
     result: TestResult = strategy.backtest(
         start_date - timedelta(days=warmup), end_date, '15m',
         ('9:30', '16:00'), [Day.MON, Day.TUES, Day.WEDS, Day.THURS, Day.FRI],
+        disable_parallel=True
     )
 
     if debug:

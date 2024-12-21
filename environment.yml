@@ -12,6 +12,6 @@ dependencies:
   - ta-lib
 
   - pip:
-      - lib-pybroker=0.21.2
+      - lib-pybroker=0.33.1
       - numpy<2 # https://github.com/TA-Lib/ta-lib-python/issues/378, https://github.com/TA-Lib/ta-lib-python/issues/661
 
